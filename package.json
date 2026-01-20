@@ -1,9 +1,14 @@
 {
-  "name": "discord-bank-bot",
+  "name": "discord-bank-pro",
   "version": "1.0.0",
+  "description": "Discord Bank Bot with MongoDB Support",
   "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "discord.js": "^14.13.0",
-    "fs-extra": "^11.1.1"
+    "mongoose": "^8.0.0",
+    "dotenv": "^16.3.1"
   }
 }
