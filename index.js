@@ -1,40 +1,35 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
-const mongoose = require('mongoose');
+const fs = require('fs-extra');
+const http = require('http');
+
+// سيرفر صغير عشان البوت ما ينامش (Keep Alive)
+http.createServer((req, res) => {
+  res.write("البوت شغال أونلاين!");
+  res.end();
+}).listen(8080);
 
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
 });
 
+const DB_PATH = './users.json';
 const PREFIX = '!';
 
-// --- ربط قاعدة البيانات (MongoDB) ---
-// هجيبلك الرابط ده في الخطوة الجاية
-const MONGO_URI = 'رابط_مونجو_دي_بي_هنا'; 
-
-mongoose.connect(MONGO_URI)
-    .then(() => console.log('✅ متصل بخزنة البيانات السحابية (MongoDB)'))
-    .catch(err => console.error('❌ فشل الاتصال بمونجو:', err));
-
-// --- تصميم شكل البيانات (User Schema) ---
-const userSchema = new mongoose.Schema({
-    userId: { type: String, required: true, unique: true },
-    wallet: { type: Number, default: 0 },
-    bank: { type: Number, default: 0 },
-    lastDaily: { type: String, default: null },
-    lastWork: { type: Number, default: 0 },
-    lastRob: { type: Number, default: 0 }
-});
-
-const User = mongoose.model('User', userSchema);
-
-// --- وظيفة إدارة البيانات الجديدة ---
-async function getUser(id) {
-    let user = await User.findOne({ userId: id });
-    if (!user) {
-        user = await User.create({ userId: id });
-    }
-    return user;
+// إدارة البيانات بملف JSON (سهلة للأونلاين)
+async function updateData(userId, callback) {
+    if (!fs.existsSync(DB_PATH)) fs.writeJsonSync(DB_PATH, {});
+    let data = fs.readJsonSync(DB_PATH);
+    if (!data[userId]) data[userId] = { wallet: 0, bank: 0, lastDaily: null, lastWork: 0, lastRob: 0 };
+    const result = await callback(data[userId]);
+    fs.writeJsonSync(DB_PATH, data);
+    return result;
 }
+
+client.on('ready', () => console.log(`✅ ${client.user.tag} جاهز!`));
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith(PREFIX)) return;
@@ -43,33 +38,81 @@ client.on('messageCreate', async (message) => {
     const command = args.shift().toLowerCase();
     const userId = message.author.id;
 
-    // مثال لأمر الرصيد باستخدام MongoDB
-    if (command === 'balance' || command === 'فلوس') {
-        const user = await getUser(userId);
+    // --- أمر المساعدة ---
+    if (command === 'help' || command === 'اوامر') {
         const embed = new EmbedBuilder()
-            .setTitle(`حساب ${message.author.username}`)
+            .setTitle('📖 قائمة الأوامر')
             .addFields(
-                { name: '💰 كاش', value: `${user.wallet} 🪙`, inline: true },
-                { name: '🏦 بنك', value: `${user.bank} 🪙`, inline: true }
+                { name: '💰 اقتصاد', value: '`balance`, `dep`, `with`, `pay`, `top`' },
+                { name: '⚒️ كسب', value: '`work`, `daily`, `rob`' },
+                { name: '🎮 ألعاب', value: '`rps`, `slots`' }
             )
-            .setColor('#F1C40F');
+            .setColor('#00ff00');
         return message.reply({ embeds: [embed] });
     }
 
-    // أمر العمل (Work) بتحديث MongoDB
-    if (command === 'work' || command === 'عمل') {
-        const user = await getUser(userId);
-        const cooldown = 300000;
-        if (Date.now() - user.lastWork < cooldown) return message.reply("ارتاح شوية! ⏳");
-
-        const p = Math.floor(Math.random() * 500) + 100;
-        user.wallet += p;
-        user.lastWork = Date.now();
-        await user.save(); // حفظ في الخزنة
-        return message.reply(`👷 اشتغلت وكسبت **${p}** 🪙`);
+    // --- الرصيد ---
+    if (command === 'balance' || command === 'فلوس') {
+        const user = await updateData(userId, () => {});
+        return message.reply(`💰 كاش: **${user.wallet}** | 🏦 بنك: **${user.bank}**`);
     }
 
-    // (باقي الأوامر زي السحب والإيداع هتستخدم نفس الطريقة: await user.save())
+    // --- العمل ---
+    if (command === 'work' || command === 'عمل') {
+        const res = await updateData(userId, (u) => {
+            if (Date.now() - u.lastWork < 300000) return "ارتاح 5 دقائق! ⏳";
+            const p = Math.floor(Math.random() * 300) + 100;
+            u.wallet += p; u.lastWork = Date.now();
+            return `👷 اشتغلت وكسبت **${p}** 🪙`;
+        });
+        return message.reply(res);
+    }
+
+    // --- اليومية ---
+    if (command === 'daily' || command === 'يومية') {
+        const res = await updateData(userId, (u) => {
+            const today = new Date().toDateString();
+            if (u.lastDaily === today) return "أخذتها خلاص! 🎁";
+            u.wallet += 1000; u.lastDaily = today;
+            return "🎁 استلمت **1000** 🪙";
+        });
+        return message.reply(res);
+    }
+
+    // --- الإيداع والسحب ---
+    if (command === 'dep' || command === 'ايداع') {
+        let amt = args[0] === 'all' ? 'all' : parseInt(args[0]);
+        const r = await updateData(userId, (u) => {
+            if (amt === 'all') amt = u.wallet;
+            if (!amt || amt <= 0 || amt > u.wallet) return "مبلغ خطأ!";
+            u.wallet -= amt; u.bank += amt; return `🏦 أودعت ${amt} في البنك.`;
+        });
+        return message.reply(r);
+    }
+
+    if (command === 'with' || command === 'سحب') {
+        let amt = args[0] === 'all' ? 'all' : parseInt(args[0]);
+        const r = await updateData(userId, (u) => {
+            if (amt === 'all') amt = u.bank;
+            if (!amt || amt <= 0 || amt > u.bank) return "رصيدك لا يكفي!";
+            u.bank -= amt; u.wallet += amt; return `💸 سحبت ${amt} من البنك.`;
+        });
+        return message.reply(r);
+    }
+
+    // --- التحويل ---
+    if (command === 'pay' || command === 'تحويل') {
+        const target = message.mentions.users.first();
+        const amount = parseInt(args[1]);
+        if (!target || isNaN(amount) || amount <= 0) return message.reply("مثال: `!pay @user 100` 💸");
+        const res = await updateData(userId, async (u) => {
+            if (u.wallet < amount) return "كاشك لا يكفي! ❌";
+            u.wallet -= amount;
+            await updateData(target.id, (t) => { t.wallet += amount; });
+            return `✅ تم تحويل **${amount}** 🪙 إلى <@${target.id}>.`;
+        });
+        return message.reply(res);
+    }
 });
 
-client.login('TOKEN_HERE');
+client.login(process.env.TOKEN);
